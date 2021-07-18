@@ -1,5 +1,4 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
     <RootNamespace>MongoDB.Entities</RootNamespace>
@@ -10,10 +9,12 @@
     <PackageProjectUrl>https://mongodb-entities.com</PackageProjectUrl>
     <Version>20.20.0-beta3</Version>
     <Copyright>Đĵ ΝιΓΞΗΛψΚ</Copyright>
-    <PackageReleaseNotes>- added DB.PagedSearch().WithFluent() method
-- added extension methods to attach a PagedSearch to any fluent pipeline
-- increased test coverage
-- upgraded mongo driver to latest</PackageReleaseNotes>
+    <PackageReleaseNotes>
+      - added DB.PagedSearch().WithFluent() method
+      - added extension methods to attach a PagedSearch to any fluent pipeline
+      - increased test coverage
+      - upgraded mongo driver to latest
+    </PackageReleaseNotes>
     <PackageId>MongoDB.Entities</PackageId>
     <Product>MongoDB.Entities</Product>
     <RepositoryUrl>https://github.com/dj-nitehawk/MongoDB.Entities</RepositoryUrl>
@@ -37,5 +38,4 @@
     <None Include="..\LICENSE" Pack="true" PackagePath="\" />
     <None Include="..\icon.png" Pack="true" PackagePath="\" />
   </ItemGroup>
-
 </Project>

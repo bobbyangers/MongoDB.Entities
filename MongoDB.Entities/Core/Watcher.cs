@@ -1,7 +1,9 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
+using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
@@ -20,31 +22,44 @@ namespace MongoDB.Entities
             => Task.WhenAll(handler.GetHandlers().Select(h => h(args)));
     }
 
+    public class CSDocument<TProjection>
+    {
+        [BsonElement("documentKey")] public BsonDocument DocumentKey { get; set; }
+        [BsonElement("fullDocument")] public TProjection FullDocument { get; set; }
+        [BsonElement("operationType")] public ChangeStreamOperationType OperationType { get; set; }
+        [BsonElement("resumeToken")] public BsonDocument ResumeToken { get; set; }
+        [BsonElement("updateDescription")] public ChangeStreamUpdateDescription UpdateDescription { get; set; }
+    }
+
     /// <summary>
     /// Watcher for subscribing to mongodb change streams.
     /// </summary>
     /// <typeparam name="T">The type of entity</typeparam>
-    public class Watcher<T> where T : IEntity
+    /// <typeparam name="TProjection">The type of the projected result</typeparam>
+    public class Watcher<T, TProjection> where T : IEntity
     {
-        /// <summary>
-        /// This event is fired when the desired types of events have occured. Will have a list of 'entities' that was received as input.
-        /// </summary>
-        public event Action<IEnumerable<T>> OnChanges;
+        internal static ConcurrentDictionary<string, Watcher<T, TProjection>> Watchers { get; }
+            = new ConcurrentDictionary<string, Watcher<T, TProjection>>();
 
         /// <summary>
         /// This event is fired when the desired types of events have occured. Will have a list of 'entities' that was received as input.
         /// </summary>
-        public event AsyncEventHandler<IEnumerable<T>> OnChangesAsync;
+        public event Action<IEnumerable<TProjection>> OnChanges;
+
+        /// <summary>
+        /// This event is fired when the desired types of events have occured. Will have a list of 'entities' that was received as input.
+        /// </summary>
+        public event AsyncEventHandler<IEnumerable<TProjection>> OnChangesAsync;
 
         /// <summary>
         /// This event is fired when the desired types of events have occured. Will have a list of 'ChangeStreamDocuments' that was received as input.
         /// </summary>
-        public event Action<IEnumerable<ChangeStreamDocument<T>>> OnChangesCSD;
+        public event Action<IEnumerable<CSDocument<TProjection>>> OnChangesCSD;
 
         /// <summary>
         /// This event is fired when the desired types of events have occured. Will have a list of 'ChangeStreamDocuments' that was received as input.
         /// </summary>
-        public event AsyncEventHandler<IEnumerable<ChangeStreamDocument<T>>> OnChangesCSDAsync;
+        public event AsyncEventHandler<IEnumerable<CSDocument<TProjection>>> OnChangesCSDAsync;
 
         /// <summary>
         /// This event is fired when an exception is thrown in the change-stream.
@@ -77,7 +92,7 @@ namespace MongoDB.Entities
         /// </summary>
         public BsonDocument ResumeToken => options?.StartAfter;
 
-        private PipelineDefinition<ChangeStreamDocument<T>, ChangeStreamDocument<T>> pipeline;
+        private PipelineDefinition<ChangeStreamDocument<T>, CSDocument<TProjection>> pipeline;
         private ChangeStreamOptions options;
         private bool resume;
         private CancellationToken cancelToken;
@@ -114,7 +129,7 @@ namespace MongoDB.Entities
         /// <param name="cancellation">A cancellation token for ending the watching/change stream</param>
         public void Start(
             EventType eventTypes,
-            Expression<Func<T, T>> projection,
+            Expression<Func<T, TProjection>> projection,
             Expression<Func<ChangeStreamDocument<T>, bool>> filter = null,
             int batchSize = 25,
             bool autoResume = true,
@@ -150,7 +165,7 @@ namespace MongoDB.Entities
         /// <param name="cancellation">A cancellation token for ending the watching/change stream</param>
         public void Start(
             EventType eventTypes,
-            Expression<Func<T, T>> projection,
+            Expression<Func<T, TProjection>> projection,
             Func<FilterDefinitionBuilder<ChangeStreamDocument<T>>, FilterDefinition<ChangeStreamDocument<T>>> filter,
             int batchSize = 25,
             bool autoResume = true,
@@ -187,7 +202,7 @@ namespace MongoDB.Entities
         public void StartWithToken(
             BsonDocument resumeToken,
             EventType eventTypes,
-            Expression<Func<T, T>> projection,
+            Expression<Func<T, TProjection>> projection,
             Expression<Func<ChangeStreamDocument<T>, bool>> filter = null,
             int batchSize = 25,
             CancellationToken cancellation = default)
@@ -223,7 +238,7 @@ namespace MongoDB.Entities
         public void StartWithToken(
             BsonDocument resumeToken,
             EventType eventTypes,
-            Expression<Func<T, T>> projection,
+            Expression<Func<T, TProjection>> projection,
             Func<FilterDefinitionBuilder<ChangeStreamDocument<T>>, FilterDefinition<ChangeStreamDocument<T>>> filter,
             int batchSize = 25,
             CancellationToken cancellation = default)
@@ -233,7 +248,7 @@ namespace MongoDB.Entities
             BsonDocument resumeToken,
             EventType eventTypes,
             FilterDefinition<ChangeStreamDocument<T>> filter,
-            Expression<Func<T, T>> projection,
+            Expression<Func<T, TProjection>> projection,
             int batchSize,
             bool onlyGetIDs,
             bool autoResume,
@@ -285,7 +300,7 @@ namespace MongoDB.Entities
 
             var stages = new List<IPipelineStageDefinition>(3) {
                 PipelineStageDefinitionBuilder.Match(filters),
-                PipelineStageDefinitionBuilder.Project<ChangeStreamDocument<T>,ChangeStreamDocument<T>>(@"
+                PipelineStageDefinitionBuilder.Project<ChangeStreamDocument <T>, CSDocument<T>>(@"
                 {
                     _id: 1,
                     operationType: 1,
@@ -296,7 +311,7 @@ namespace MongoDB.Entities
             };
 
             if (projection != null)
-                stages.Add(PipelineStageDefinitionBuilder.Project(BuildProjection(projection)));
+                stages.Add(BuildProjection(projection));
 
             pipeline = stages;
 
@@ -313,32 +328,45 @@ namespace MongoDB.Entities
             StartWatching();
         }
 
-        private static ProjectionDefinition<ChangeStreamDocument<T>, ChangeStreamDocument<T>> BuildProjection(Expression<Func<T, T>> projection)
+        private static PipelineStageDefinition<CSDocument<T>, CSDocument<TProjection>> BuildProjection(Expression<Func<T, TProjection>> projection)
         {
-            //todo: see if we can use projection solution from PagedSearch
-
-            var rendered = Builders<T>.Projection
-                .Expression(projection)
+            var rendered = PipelineStageDefinitionBuilder
+                .Project(projection)
                 .Render(BsonSerializer.SerializerRegistry.GetSerializer<T>(),
                         BsonSerializer.SerializerRegistry);
 
             BsonDocument doc = new BsonDocument {
-                { "_id",1 },
+                { "_id", 1 },
                 { "operationType", 1},
                 { "documentKey", 1},
                 { "updateDescription", 1},
                 { "fullDocument._id", 1}
             };
 
-            foreach (var element in rendered.Document.Elements)
+            foreach (var element in rendered.Document["$project"].AsBsonDocument.Elements)
             {
                 if (element.Name != "_id")
                 {
-                    doc["fullDocument." + element.Name] = element.Value;
+                    if (element.Value.BsonType == BsonType.Document)
+                    {
+                        foreach (var el in element.Value.AsBsonDocument.Elements.ToArray())
+                        {
+                            element.Value[el.Name] = el.Value.AsString.Insert(1, "fullDocument.");
+                        }
+
+                        doc["fullDocument." + element.Name] = element.Value;
+                    }
+                    else
+                    {
+                        doc["fullDocument." + element.Name] = element.Value.AsString.Insert(1, "fullDocument.");
+                    }
                 }
             }
 
-            return doc;
+            return new BsonDocument
+            {
+                { "$project", doc }
+            };
         }
 
         /// <summary>
@@ -381,6 +409,8 @@ namespace MongoDB.Entities
             {
                 try
                 {
+                    //var rendered = pipeline.Render(BsonSerializer.SerializerRegistry.GetSerializer<ChangeStreamDocument<T>>(), BsonSerializer.SerializerRegistry);
+
                     using (var cursor = await DB.Collection<T>().WatchAsync(pipeline, options, cancelToken).ConfigureAwait(false))
                     {
                         while (!cancelToken.IsCancellationRequested && await cursor.MoveNextAsync(cancelToken).ConfigureAwait(false))
@@ -429,13 +459,13 @@ namespace MongoDB.Entities
 
                             if (OnChanges != null)
                             {
-                                foreach (Action<IEnumerable<T>> a in OnChanges.GetInvocationList())
+                                foreach (Action<IEnumerable<TProjection>> a in OnChanges.GetInvocationList())
                                     OnChanges -= a;
                             }
 
                             if (OnChangesCSD != null)
                             {
-                                foreach (Action<IEnumerable<ChangeStreamDocument<T>>> a in OnChangesCSD.GetInvocationList())
+                                foreach (Action<IEnumerable<CSDocument<TProjection>>> a in OnChangesCSD.GetInvocationList())
                                     OnChangesCSD -= a;
                             }
 

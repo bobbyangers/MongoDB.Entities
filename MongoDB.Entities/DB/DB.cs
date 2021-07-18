@@ -264,7 +264,6 @@ namespace MongoDB.Entities
         internal static IMongoCollection<T> Collection { get; private set; }
         internal static string DBName { get; private set; }
         internal static string CollectionName { get; private set; }
-        internal static ConcurrentDictionary<string, Watcher<T>> Watchers { get; private set; }
         internal static bool HasCreatedOn { get; private set; }
         internal static bool HasModifiedOn { get; private set; }
         internal static string ModifiedOnPropName { get; private set; }
@@ -298,8 +297,6 @@ namespace MongoDB.Entities
 
             Collection = Database.GetCollection<T>(CollectionName);
             TypeMap.AddCollectionMapping(type, CollectionName);
-
-            Watchers = new ConcurrentDictionary<string, Watcher<T>>();
 
             var interfaces = type.GetInterfaces();
             HasCreatedOn = interfaces.Any(it => it == typeof(ICreatedOn));

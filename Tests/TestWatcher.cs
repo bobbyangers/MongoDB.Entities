@@ -41,40 +41,60 @@ namespace MongoDB.Entities.Tests
             Assert.AreEqual(4, allFlowers.Count);
         }
 
+        private class FlowerItem
+        {
+            public string FlowerID { get; set; }
+            public string FlowerColor { get; set; }
+            public string FlowerCatName { get; set; }
+            public int FlowerCatCode { get; set; }
+            public string FlowerName { get; set; }
+        }
+
         [TestMethod]
         public async Task watching_with_projection_works()
         {
-            var watcher = DB.Watcher<Flower>("test-with-projection");
-            var allFlowers = new List<Flower>();
+            var watcher = DB.Watcher<Flower, FlowerItem>("test-with-projection");
+            var flowerItems = new List<FlowerItem>();
 
             watcher.Start(
                 EventType.Created | EventType.Updated,
-                f => new Flower { Color = f.Color },
+                f => new FlowerItem
+                {
+                    FlowerID = f.ID.ToString(),
+                    FlowerCatCode = f.FlowerCat.Code,
+                    FlowerCatName = f.FlowerCat.Name,
+                    FlowerColor = f.Color
+                },
                 f => f.FullDocument.Color == "red");
 
             await Task.Delay(500);
 
-            watcher.OnChangesAsync += async flowers =>
+            watcher.OnChangesAsync += async fItems =>
             {
-                allFlowers.AddRange(flowers);
+                flowerItems.AddRange(fItems);
                 await Task.CompletedTask;
             };
 
             await new[] {
-                new Flower { Name = "test", Color = "red" },
-                new Flower { Name = "test", Color = "red" },
-                new Flower { Name = "test", Color = "red" }
+                new Flower { Name = "test", Color = "blue", FlowerCat = new Category{ Name = "cat", Code = 1 } },
+                new Flower { Name = "test", Color = "red", FlowerCat = new Category{ Name = "cat", Code = 1 } },
+                new Flower { Name = "test", Color = "red", FlowerCat = new Category{ Name = "cat", Code = 1 } },
+                new Flower { Name = "test", Color = "red", FlowerCat = new Category{ Name = "cat", Code = 1 } }
             }.SaveAsync();
 
             var flower = new Flower { Name = "test" };
             await flower.SaveAsync();
-
             await flower.DeleteAsync();
 
             await Task.Delay(500);
 
-            Assert.AreEqual(3, allFlowers.Count);
-            Assert.IsTrue(allFlowers[0].Name == null && allFlowers[0].Color == "red");
+            Assert.AreEqual(3, flowerItems.Count);
+            Assert.IsTrue(
+                flowerItems[0].FlowerName == null &&
+                flowerItems[0].FlowerColor == "red" &&
+                flowerItems[0].FlowerCatName == "cat" &&
+                flowerItems[0].FlowerCatCode == 1 &&
+                flowerItems[0].FlowerID != null);
         }
 
         [TestMethod]
